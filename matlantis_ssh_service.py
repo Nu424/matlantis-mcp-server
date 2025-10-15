@@ -11,7 +11,8 @@ from fabric import Connection
 
 class MatlantisSSHService:
     # 転送時に無視するパターン
-    DEFAULT_IGNORE = {'.git', '.venv', '__pycache__', '.ipynb_checkpoints', '.DS_Store'}
+    DEFAULT_IGNORE = {'.git', '.venv', '__pycache__',
+                      '.ipynb_checkpoints', '.DS_Store'}
 
     def __init__(self):
         self.is_connected = False  # SSH接続が成立しているかどうか
@@ -72,7 +73,7 @@ class MatlantisSSHService:
             self.websocat_proc.wait()
             self.is_connected = False
 
-    def __execute_command(self, command: str):
+    def _execute_command(self, command: str):
         """
         リモートのMatlantis環境でコマンドを実行する
 
@@ -87,14 +88,37 @@ class MatlantisSSHService:
     # ---内部ユーティリティ
     # ----------
     def _get_sftp(self):
-        """SFTP クライアントを取得する"""
+        """SFTP クライアントを取得する（毎回新規のSFTPクライアントを開く）"""
         if not self.is_connected:
             raise RuntimeError("SSH接続が成立していません")
-        return self.ssh_connection.sftp()
+        # Fabricのキャッシュを避けて毎回新規のSFTPを開く
+        # これにより、sftp.close()後も次回呼び出し時に新しいSFTPが取得できる
+        return self.ssh_connection.client.open_sftp()
 
+    # ---リモートのファイル・パス操作
     def _remote_path_join(self, *parts):
         """リモート(Linux)のパス結合を行う"""
         return posixpath.join(*parts)
+
+    def _get_remote_home(self) -> str:
+        """リモートユーザーのホームディレクトリの絶対パスを取得する"""
+        if not self.is_connected:
+            raise RuntimeError("SSH接続が成立していません")
+        result = self._execute_command('printf %s "$HOME"')
+        home = result.stdout.strip()
+        if not home:
+            raise RuntimeError("リモートのHOMEが取得できませんでした")
+        return home
+
+    def _expand_remote_path(self, path: str) -> str:
+        """'~' をリモートのHOMEで展開した絶対パスを返す（先頭の '~' のみ対応）"""
+        if not path:
+            return path
+        if path == '~':
+            return self._get_remote_home()
+        if path.startswith('~/'):
+            return self._remote_path_join(self._get_remote_home(), path[2:])
+        return path
 
     def _remote_exists(self, sftp, path: str) -> bool:
         """リモートパスの存在を確認する"""
@@ -116,17 +140,29 @@ class MatlantisSSHService:
         """リモートディレクトリを再帰的に作成する (mkdir -p 相当)"""
         if self._remote_exists(sftp, path):
             return
-        
+
         parent = posixpath.dirname(path)
         if parent and parent != path:
             self._ensure_remote_dir(sftp, parent)
-        
+
         try:
             sftp.mkdir(path)
         except IOError:
             # 既に存在する場合は無視
             pass
 
+    # ---リモートのPython環境確認
+    def _detect_remote_python(self) -> str:
+        """リモートのPythonコマンドを検出する"""
+        # python3を優先
+        result = self._execute_command(
+            "which python3 2>/dev/null || which python 2>/dev/null")
+        python_cmd = result.stdout.strip()
+        if not python_cmd:
+            raise RuntimeError("リモートにPythonが見つかりません")
+        return python_cmd
+
+    # ---アップロードする際の処理
     def _should_ignore(self, name: str) -> bool:
         """ファイル/ディレクトリ名が無視対象かどうかを判定する"""
         return name in self.DEFAULT_IGNORE
@@ -141,25 +177,16 @@ class MatlantisSSHService:
             for root, dirs, files in os.walk(local_path):
                 # 無視対象のディレクトリを除外
                 dirs[:] = [d for d in dirs if not self._should_ignore(d)]
-                
+
                 root_path = Path(root)
                 for file in files:
                     if self._should_ignore(file):
                         continue
-                    
+
                     file_path = root_path / file
                     # zipファイル内のパスはlocal_pathからの相対パスにする
                     arcname = file_path.relative_to(local_path)
                     zf.write(file_path, arcname)
-
-    def _detect_remote_python(self) -> str:
-        """リモートのPythonコマンドを検出する"""
-        # python3を優先
-        result = self.__execute_command("which python3 2>/dev/null || which python 2>/dev/null")
-        python_cmd = result.stdout.strip()
-        if not python_cmd:
-            raise RuntimeError("リモートにPythonが見つかりません")
-        return python_cmd
 
     # ----------
     # ---各種機能
@@ -189,38 +216,44 @@ class MatlantisSSHService:
             # 1. ローカルで一時zipファイルを作成
             with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as tmp:
                 local_zip = tmp.name
-            
+
             self._create_zip_from_directory(str(local_path), local_zip)
 
-            # 2. リモートの一時ディレクトリとzipパスを準備
-            remote_tmp_dir = "~/.matlantis/tmp"
-            self.__execute_command(f"mkdir -p {remote_tmp_dir}")
-            
+            # 2. リモートの一時ディレクトリとzipパスを準備（HOME を絶対パスとして解決）
+            remote_home = self._get_remote_home()
+            remote_tmp_dir = self._remote_path_join(remote_home, '.matlantis-ssh-service', 'tmp')
+            self._execute_command(f"mkdir -p '{remote_tmp_dir}'")
+
             remote_zip = f"{remote_tmp_dir}/upload_{uuid.uuid4().hex}.zip"
 
             # 3. zipファイルをリモートにアップロード
             sftp.put(local_zip, remote_zip)
 
-            # 4. リモートでターゲットディレクトリを作成
-            self.__execute_command(f"mkdir -p {remote_path}")
+            # 4. リモートでターゲットディレクトリを作成（~ を展開）
+            expanded_remote_path = self._expand_remote_path(remote_path)
+            self._execute_command(f"mkdir -p '{expanded_remote_path}'")
 
-            # 5. リモートでzipを解凍
+            # 5. リモートでzipを解凍（~ や環境変数を展開してから使用）
             python_cmd = self._detect_remote_python()
             unzip_script = f"""
+import os
 import zipfile
-with zipfile.ZipFile('{remote_zip}', 'r') as zf:
-    zf.extractall('{remote_path}')
+
+zip_path = os.path.expanduser(os.path.expandvars('{remote_zip}'))
+target_path = os.path.expanduser(os.path.expandvars('{expanded_remote_path}'))
+with zipfile.ZipFile(zip_path, 'r') as zf:
+    zf.extractall(target_path)
 """
-            self.__execute_command(f"{python_cmd} -c \"{unzip_script}\"")
+            self._execute_command(f"{python_cmd} -c \"{unzip_script}\"")
 
             # 6. リモートの一時zipファイルを削除
-            self.__execute_command(f"rm -f {remote_zip}")
+            self._execute_command(f"rm -f {remote_zip}")
 
         finally:
             # ローカルの一時zipファイルを削除
             if local_zip and os.path.exists(local_zip):
                 os.remove(local_zip)
-            
+
             sftp.close()
 
     def download_directory(self, remote_path: str, local_path: str, allow_overwrite: bool = False):
@@ -236,11 +269,12 @@ with zipfile.ZipFile('{remote_zip}', 'r') as zf:
             raise RuntimeError("SSH接続が成立していません")
 
         sftp = self._get_sftp()
-        
+        expanded_remote_path = self._expand_remote_path(remote_path)
+
         # リモートパスの存在確認
-        if not self._remote_exists(sftp, remote_path):
+        if not self._remote_exists(sftp, expanded_remote_path):
             raise FileNotFoundError(f"リモートパス {remote_path} が存在しません")
-        if not self._remote_isdir(sftp, remote_path):
+        if not self._remote_isdir(sftp, expanded_remote_path):
             raise ValueError(f"{remote_path} はディレクトリではありません")
 
         # ローカルパスの確認
@@ -248,7 +282,8 @@ with zipfile.ZipFile('{remote_zip}', 'r') as zf:
         if not allow_overwrite and local_path.exists():
             # ディレクトリが存在し、中身がある場合はエラー
             if local_path.is_dir() and any(local_path.iterdir()):
-                raise ValueError(f"ローカルパス {local_path} は既に存在し中身があります。上書きする場合は allow_overwrite=True を指定してください")
+                raise ValueError(
+                    f"ローカルパス {local_path} は既に存在し中身があります。上書きする場合は allow_overwrite=True を指定してください")
             elif local_path.is_file():
                 raise ValueError(f"ローカルパス {local_path} はファイルとして存在します")
 
@@ -258,9 +293,10 @@ with zipfile.ZipFile('{remote_zip}', 'r') as zf:
         try:
             # 1. リモートでzipを作成
             python_cmd = self._detect_remote_python()
-            remote_tmp_dir = "~/.matlantis/tmp"
-            self.__execute_command(f"mkdir -p {remote_tmp_dir}")
-            
+            remote_home = self._get_remote_home()
+            remote_tmp_dir = self._remote_path_join(remote_home, '.matlantis-ssh-service', 'tmp')
+            self._execute_command(f"mkdir -p '{remote_tmp_dir}'")
+
             remote_zip = f"{remote_tmp_dir}/download_{uuid.uuid4().hex}.zip"
 
             # リモートでzip作成スクリプトを実行
@@ -273,8 +309,10 @@ ignore_patterns = {list(self.DEFAULT_IGNORE)}
 def should_ignore(name):
     return name in ignore_patterns
 
-with zipfile.ZipFile('{remote_zip}', 'w', zipfile.ZIP_DEFLATED) as zf:
-    base_path = '{remote_path}'
+zip_path = os.path.expanduser(os.path.expandvars('{remote_zip}'))
+base_path = os.path.expanduser(os.path.expandvars('{expanded_remote_path}'))
+
+with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
     for root, dirs, files in os.walk(base_path):
         # 無視対象のディレクトリを除外
         dirs[:] = [d for d in dirs if not should_ignore(d)]
@@ -288,7 +326,7 @@ with zipfile.ZipFile('{remote_zip}', 'w', zipfile.ZIP_DEFLATED) as zf:
             arcname = os.path.relpath(file_path, base_path)
             zf.write(file_path, arcname)
 """
-            self.__execute_command(f"{python_cmd} -c '{zip_script}'")
+            self._execute_command(f"{python_cmd} -c \"{zip_script}\"")
 
             # 2. ローカルに一時zipファイルを作成
             with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as tmp:
@@ -303,13 +341,13 @@ with zipfile.ZipFile('{remote_zip}', 'w', zipfile.ZIP_DEFLATED) as zf:
                 zf.extractall(local_path)
 
             # 5. リモートの一時zipファイルを削除
-            self.__execute_command(f"rm -f {remote_zip}")
+            self._execute_command(f"rm -f {remote_zip}")
 
         finally:
             # ローカルの一時zipファイルを削除
             if local_zip and os.path.exists(local_zip):
                 os.remove(local_zip)
-            
+
             sftp.close()
 
     def execute_python_script(self, script_path: str, script_log_path: str = None):
@@ -327,7 +365,8 @@ with zipfile.ZipFile('{remote_zip}', 'w', zipfile.ZIP_DEFLATED) as zf:
             raise RuntimeError("SSH接続が成立していません")
 
         # リモートスクリプトの存在確認
-        check_result = self.__execute_command(f"test -f {script_path} && echo 'exists' || echo 'not_found'")
+        check_result = self._execute_command(
+            f"test -f {script_path} && echo 'exists' || echo 'not_found'")
         if check_result.stdout.strip() != 'exists':
             raise FileNotFoundError(f"リモートスクリプト {script_path} が存在しません")
 
@@ -344,6 +383,6 @@ with zipfile.ZipFile('{remote_zip}', 'w', zipfile.ZIP_DEFLATED) as zf:
             command = f"{python_cmd} -u {script_path}"
 
         # スクリプトを実行（エラーでも例外を投げない設定）
-        result = self.__execute_command(command)
-        
+        result = self._execute_command(command)
+
         return result
