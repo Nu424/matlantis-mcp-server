@@ -1,64 +1,54 @@
-"""
-{
-    "mcpServers": {
-        "matlantis-mcp-server": {
-            "command": "uv",
-            "args": [
-                "--directory",
-                "matlantis-mcp-serverがあるディレクトリのパス",
-                "run",
-                "server.py"
-            ],
-            "alwaysAllow": [
-                "execute_python_script_in_matlantis",
-                "get_execution_status",
-                "get_last_result"
-            ],
-            "disabled": false
-        }
-    }
-}
-
-"""
-
-# server.py
 import asyncio
 import json
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.server import Context
 
-from task_manager import MatlantisTaskManager
+from task_manager import MatlantisTaskManager, TaskStatus
 
 load_dotenv()
 
-# Create an MCP server with debug enabled
-mcp = FastMCP("Demo", debug=True)
+# MCPサーバーを作成
+mcp = FastMCP("Matlantis MCP Server", debug=True)
 
 # タスクマネージャーのシングルトンインスタンス
 task_manager = MatlantisTaskManager()
 
 
 @mcp.tool()
-async def long_sleep(minutes: int, ctx: Context) -> str:
-    """長時間、待つ。
+async def wait_for_task_completion(seconds: int, ctx: Context) -> str:
+    """タスクが完了するまで待つ
 
     Args:
-        minutes: 待つ時間（分）
-        ctx: コンテキスト
+        seconds: 待つ時間（秒）
 
     Returns:
-        str: 終わったよ！
+        str: Done!
 
     None:
-        場合によってはタイムアウトする可能性がある。
+        - タスクが実行されている場合、そのステータスを確認する。
+        - タスクが完了したら、自動的に待機を終了する。
+        - 場合によってはタイムアウトする可能性がある。その場合は、get_execution_status() で状態を確認したり、再度 wait_for_task_completion() を呼び出したりする。
     """
-    REPORT_INTERVAL = 30  # 60秒ごとに進捗を報告
-    MAX_COUNT = minutes * 60 // REPORT_INTERVAL
-    for i in range(MAX_COUNT):
-        await ctx.report_progress(i, MAX_COUNT)
-        await asyncio.sleep(REPORT_INTERVAL)
-    return "終わったよ！"
+    for i in range(seconds):
+        await ctx.report_progress(i + 1, seconds)
+
+        # タスクが実行されている場合、そのステータスを確認する
+        status = task_manager.get_status()
+        state = status.get("status")
+
+        if state == TaskStatus.RUNNING.value:
+            await ctx.info(
+                f"Status: {state}, Stage: {status.get('stage')}, Progress: {status.get('progress_pct')}%"
+            )
+        elif state in (TaskStatus.SUCCEEDED.value, TaskStatus.FAILED.value):
+            await ctx.info(
+                f"Status: {state}, Stage: {status.get('stage')}, Progress: {status.get('progress_pct')}%"
+            )
+            break
+
+        await asyncio.sleep(1)
+    return "Done!"
 
 
 @mcp.tool()
