@@ -154,13 +154,34 @@ class MatlantisSSHService:
 
     # ---リモートのPython環境確認
     def _detect_remote_python(self) -> str:
-        """リモートのPythonコマンドを検出する"""
-        # python3を優先
-        result = self._execute_command(
-            "which python3 2>/dev/null || which python 2>/dev/null")
+        """リモートのPythonコマンドを検出する
+        
+        ~/.py39/bin/python3, ~/.py310/bin/python3 等を探索し、
+        最新のバージョンのPythonを優先して返す。
+        見つからない場合は which python3 || which python にフォールバックする。
+        """
+        # まず ~/.py*/bin/python3 の候補を探索し、最新を選択
+        detect_script = """
+set -e
+CANDS=$(ls -1d ~/.py*/bin/python3 2>/dev/null || true)
+if [ -n "$CANDS" ]; then
+  BEST=$(for p in $CANDS; do
+           [ -x "$p" ] || continue
+           v=$("$p" -V 2>&1 | awk '{print $2}')
+           [ -n "$v" ] && echo "$v $p"
+         done | sort -V | tail -n1 | awk '{print $2}')
+  if [ -n "$BEST" ]; then
+    echo "$BEST"
+    exit 0
+  fi
+fi
+which python3 2>/dev/null || which python 2>/dev/null
+"""
+        result = self._execute_command(detect_script)
         python_cmd = result.stdout.strip()
         if not python_cmd:
             raise RuntimeError("リモートにPythonが見つかりません")
+        print(f"リモートにPythonが見つかりました: {python_cmd}")
         return python_cmd
 
     # ---アップロードする際の処理
