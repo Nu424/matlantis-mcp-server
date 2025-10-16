@@ -140,7 +140,7 @@ MATLANTIS_DOMAIN=your-matlantis-domain.com
 # MatlantisのユーザーID
 MATLANTIS_USER_ID=your-user-id
 
-# Notebook Pre-Shared Key（Matlantis NotebookのSettings > Securityから取得）
+# Notebook Pre-Shared Key
 NOTEBOOK_PRE_SHARED_KEY=your-pre-shared-key
 
 # SSHユーザー名（通常は jovyan）
@@ -742,89 +742,6 @@ SSH接続、ファイル転送、スクリプト実行のユーティリティ�
 - **リソース管理**: Matlantis環境のリソース競合を回避
 - **シンプルさ**: ジョブキューの実装が不要
 - **明確性**: 現在の状態を常に一意に特定可能
-
-### 新しいMCPツールの追加
-
-最小例: リモートファイルの一覧を取得するツール
-
-```python
-# server.py に追加
-
-@mcp.tool()
-async def list_remote_files(remote_path: str) -> str:
-    """リモートディレクトリのファイル一覧を取得する
-    
-    Args:
-        remote_path: リモートディレクトリパス
-        
-    Returns:
-        str: ファイル一覧のJSON文字列
-    """
-    # 新しいSSH接続を確立（タスクマネージャーは使わない短時間操作）
-    service = MatlantisSSHService()
-    try:
-        service.connect(
-            websocat_bin_path=os.getenv("WEBSOCAT_BIN"),
-            matlantis_domain=os.getenv("MATLANTIS_DOMAIN"),
-            matlantis_user_id=os.getenv("MATLANTIS_USER_ID"),
-            notebook_pre_shared_key=os.getenv("NOTEBOOK_PRE_SHARED_KEY"),
-            user_name=os.getenv("USER_NAME", "jovyan"),
-            identity_file=os.getenv("IDENTITY_FILE"),
-            local_port=int(os.getenv("LOCAL_PORT", "2222"))
-        )
-        
-        # リモートコマンドを実行
-        result = service._execute_command(f"ls -la {remote_path}")
-        
-        return json.dumps({
-            "success": True,
-            "output": result.stdout
-        }, ensure_ascii=False, indent=2)
-        
-    except Exception as e:
-        return json.dumps({
-            "success": False,
-            "error": str(e)
-        }, ensure_ascii=False, indent=2)
-        
-    finally:
-        if service.is_connected:
-            service.disconnect()
-```
-
-### テスト
-
-現在、自動テストは未実装です。手動テストは以下の手順で行います：
-
-1. `.env` ファイルを設定
-2. MCPクライアント（Cursorなど）を起動
-3. サーバーが正しく接続されることを確認
-4. 各ツールを順次実行して動作確認
-
-**テスト用スクリプト例:**
-
-```python
-# test_script.py
-import time
-print("Starting calculation...")
-for i in range(5):
-    print(f"Progress: {(i+1)*20}%")
-    time.sleep(1)
-print("Calculation completed!")
-
-# 成果物を生成
-with open("result.txt", "w") as f:
-    f.write("Simulation result: 42\n")
-```
-
-### 拡張のアイデア
-
-- **複数ジョブキュー**: `queue.Queue` でタスクをキューイング
-- **ジョブ履歴**: データベース（SQLite）に履歴を保存
-- **キャンセル機能**: スレッドイベントによる中断シグナル
-- **リトライ機構**: 一時的なネットワークエラーに対する自動リトライ
-- **通知**: ジョブ完了時のメール/Slack通知
-- **進捗ストリーミング**: リモートログのリアルタイム取得
 
 ### コーディング規約
 
