@@ -12,9 +12,11 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Optional
+from dotenv import load_dotenv
 
 from matlantis_ssh_service import MatlantisSSHService
 
+load_dotenv()
 
 class TaskStatus(Enum):
     """タスクの実行ステータス"""

@@ -11,3 +11,5 @@ wheels/
 
 *.exe
 .env
+
+test_dir/
