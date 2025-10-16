@@ -169,7 +169,7 @@ IDENTITY_FILE=~/.ssh/id_rsa
 
 #### Cursorの場合
 
-`%APPDATA%\Cursor\User\globalStorage\rooveterinaryinc.roo-cline\settings\cline_mcp_settings.json` に以下を追加：
+各MCPクライアントの設定ファイルに以下を追加します。
 
 ```json
 {
@@ -183,31 +183,12 @@ IDENTITY_FILE=~/.ssh/id_rsa
         "server.py"
       ],
       "alwaysAllow": [
+        "wait_for_task_completion",
         "execute_python_script_in_matlantis",
         "get_execution_status",
         "get_last_result"
       ],
       "disabled": false
-    }
-  }
-}
-```
-
-#### Claude Desktopの場合
-
-`~/Library/Application Support/Claude/claude_desktop_config.json`（macOS）または `%APPDATA%\Claude\claude_desktop_config.json`（Windows）に追加：
-
-```json
-{
-  "mcpServers": {
-    "matlantis-mcp-server": {
-      "command": "uv",
-      "args": [
-        "--directory",
-        "/path/to/matlantis-mcp-server",
-        "run",
-        "server.py"
-      ]
     }
   }
 }
@@ -219,7 +200,7 @@ MCPクライアントを再起動すると、サーバーが自動的に起動�
 
 ```
 MCP server 'matlantis-mcp-server' connected successfully
-Available tools: execute_python_script_in_matlantis, get_execution_status, get_last_result
+Available tools: wait_for_task_completion, execute_python_script_in_matlantis, get_execution_status, get_last_result
 ```
 
 ### 3. 使用例
@@ -357,6 +338,27 @@ Matlantis環境でPythonスクリプトを実行します。
   "message": "実行結果がありません"
 }
 ```
+
+### 4. `wait_for_task_completion`
+
+タスクが完了するまで指定秒数の間待機します。待機中は1秒ごとに進捗を報告し、タスクが `succeeded` または `failed` になった時点で即座に終了します。指定時間内に完了しなかった場合はタイムアウトとして終了します（その場合は `get_execution_status` を再確認してください）。
+
+**パラメータ:**
+
+| パラメータ | 型   | 説明                               |
+|------------|------|------------------------------------|
+| `seconds`  | int  | 待機する最大時間（秒）。1秒ごとに確認 |
+
+**戻り値:**
+
+```
+"Done!"
+```
+
+**備考:**
+- 待機中、内部的に `get_execution_status()` 相当の状態を確認します。
+- 進捗はMCPクライアント側のプログレスUIやログに反映されます。
+- 早期完了（成功/失敗）時は即座に戻ります。時間内に終わらない場合は時間経過で戻ります。
 
 ## 利用ワークフロー
 
@@ -650,7 +652,7 @@ MCP サーバーの定義とツール登録を行います。
 from mcp.server.fastmcp import FastMCP
 from task_manager import MatlantisTaskManager
 
-mcp = FastMCP("Demo", debug=True)
+mcp = FastMCP("Matlantis MCP Server", debug=True)
 task_manager = MatlantisTaskManager()
 
 @mcp.tool()
