@@ -12,7 +12,7 @@ from fabric import Connection
 class MatlantisSSHService:
     # 転送時に無視するパターン
     DEFAULT_IGNORE = {'.git', '.venv', '__pycache__',
-                      '.ipynb_checkpoints', '.DS_Store'}
+                      '.ipynb_checkpoints', '.DS_Store', 'mms_runs'}
 
     def __init__(self):
         self.is_connected = False  # SSH接続が成立しているかどうか

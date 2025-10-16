@@ -80,7 +80,7 @@ Matlantis環境で計算化学シミュレーションコードを実行する�
    ↓           ログ出力: ~/.matlantis-jobs/{job_id}/execution.log
    ↓
 5. [downloading] 実行結果をローカルにダウンロード
-   ↓             ローカルディレクトリ: ./runs/{job_id}/
+   ↓             ローカルディレクトリ: {directory_path}/mms_runs/{job_id}/
    ↓
 6. [finalizing] SSH切断・結果記録 (succeeded / failed)
 ```
@@ -330,7 +330,7 @@ Matlantis環境でPythonスクリプトを実行します。
   "error": null,
   "traceback": null,
   "remote_log_path": "~/.matlantis-jobs/a1b2c3d4e5f6/execution.log",
-  "local_artifacts_path": "./runs/a1b2c3d4e5f6"
+  "local_artifacts_path": "C:/projects/my_simulation/mms_runs/a1b2c3d4e5f6"
 }
 ```
 
@@ -345,7 +345,7 @@ Matlantis環境でPythonスクリプトを実行します。
   "error": "スクリプトの実行が失敗しました (exit code: 1)",
   "traceback": "Traceback (most recent call last):\n...",
   "remote_log_path": "~/.matlantis-jobs/a1b2c3d4e5f6/execution.log",
-  "local_artifacts_path": "./runs/a1b2c3d4e5f6"
+  "local_artifacts_path": "C:/projects/my_simulation/mms_runs/a1b2c3d4e5f6"
 }
 ```
 
@@ -379,7 +379,7 @@ Matlantis環境でPythonスクリプトを実行します。
    ```
    status: succeeded を確認
    → get_last_result で詳細取得
-   → local_artifacts_path から成果物を確認
+   → local_artifacts_path（実行ディレクトリ内のmms_runs/{job_id}）から成果物を確認
    ```
 
 ### ディレクトリ構成
@@ -396,12 +396,15 @@ Matlantis環境でPythonスクリプトを実行します。
 
 **ローカル:**
 ```
-./runs/
-  └── {job_id}/              # ダウンロードされた成果物
-      ├── run.py             # スクリプト（参照用）
-      ├── data/              # データ（参照用）
-      ├── results/           # 生成されたファイル
-      └── execution.log      # 実行ログ
+{directory_path}/           # 実行元ディレクトリ
+  ├── run.py                # 実行したスクリプト
+  ├── data/                 # 元データ
+  └── mms_runs/             # 実行結果ディレクトリ（自動作成）
+      └── {job_id}/         # ジョブごとの成果物
+          ├── run.py        # スクリプト（参照用）
+          ├── data/         # データ（参照用）
+          ├── results/      # 生成されたファイル
+          └── execution.log # 実行ログ
 ```
 
 ## 仕様と制約
@@ -426,6 +429,7 @@ Matlantis環境でPythonスクリプトを実行します。
 __pycache__
 .ipynb_checkpoints
 .DS_Store
+mms_runs
 ```
 
 **カスタマイズ**: `matlantis_ssh_service.py` の `DEFAULT_IGNORE` を編集

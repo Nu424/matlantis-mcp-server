@@ -79,9 +79,11 @@ async def execute_python_script_in_matlantis(
             - message: メッセージ
 
     Notes:
-        作成したシミュレーションコードを、実際にMatlantis環境で実行する際に使用する。
-        同時実行は1タスクのみで、実行中は新規タスクを拒否する。
-        実行状況は get_execution_status() で確認できる。
+        - 作成したシミュレーションコードを、実際にMatlantis環境で実行する際に使用する。
+        - 同時実行は1タスクのみで、実行中は新規タスクを拒否する。
+        - 実行状況は get_execution_status() で確認できる。
+        - タスクが完了すると、作業ディレクトリ内のmms_runs/{job_id}に成果物が保存される。
+            - 最新の完了タスクのjob_idは get_last_result() で取得できる。
     """
     result = task_manager.submit(script_path, directory_path)
     return json.dumps(result, ensure_ascii=False, indent=2)

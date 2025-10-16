@@ -294,8 +294,8 @@ class MatlantisTaskManager:
             # --- Stage 3: ダウンロード ---
             self._update_job(stage="downloading", progress_pct=80)
 
-            # ローカルの成果物ディレクトリを準備
-            local_artifacts_dir = f"./runs/{job_id}"
+            # ローカルの成果物ディレクトリを準備（実行ディレクトリ内のmms_runs）
+            local_artifacts_dir = Path(directory_path) / "mms_runs" / job_id
             Path(local_artifacts_dir).mkdir(parents=True, exist_ok=True)
 
             # 結果をダウンロード
