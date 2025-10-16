@@ -178,7 +178,7 @@ IDENTITY_FILE=~/.ssh/id_rsa
       "command": "uv",
       "args": [
         "--directory",
-        "C:\\code\\matlantis-mcp-server",
+        "/path/to/matlantis-mcp-server",
         "run",
         "server.py"
       ],
