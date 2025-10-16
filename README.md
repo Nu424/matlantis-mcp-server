@@ -74,10 +74,10 @@ Matlantis環境で計算化学シミュレーションコードを実行する�
 2. [initializing] タスク受付・検証
    ↓
 3. [uploading] ディレクトリをZIP化してリモートに転送
-   ↓           リモートディレクトリ: ~/.matlantis-jobs/{job_id}/
+   ↓           リモートディレクトリ: ~/mms-jobs/{job_id}/
    ↓
 4. [executing] リモートでPythonスクリプトを実行
-   ↓           ログ出力: ~/.matlantis-jobs/{job_id}/execution.log
+   ↓           ログ出力: ~/mms-jobs/{job_id}/execution.log
    ↓
 5. [downloading] 実行結果をローカルにダウンロード
    ↓             ローカルディレクトリ: {directory_path}/mms_runs/{job_id}/
@@ -310,7 +310,7 @@ Matlantis環境でPythonスクリプトを実行します。
   "message": "タスクが正常に完了しました",
   "error": null,
   "traceback": null,
-  "remote_log_path": "~/.matlantis-jobs/a1b2c3d4e5f6/execution.log",
+  "remote_log_path": "~/mms-jobs/a1b2c3d4e5f6/execution.log",
   "local_artifacts_path": "C:/projects/my_simulation/mms_runs/a1b2c3d4e5f6"
 }
 ```
@@ -325,7 +325,7 @@ Matlantis環境でPythonスクリプトを実行します。
   "message": "タスクの実行中にエラーが発生しました",
   "error": "スクリプトの実行が失敗しました (exit code: 1)",
   "traceback": "Traceback (most recent call last):\n...",
-  "remote_log_path": "~/.matlantis-jobs/a1b2c3d4e5f6/execution.log",
+  "remote_log_path": "~/mms-jobs/a1b2c3d4e5f6/execution.log",
   "local_artifacts_path": "C:/projects/my_simulation/mms_runs/a1b2c3d4e5f6"
 }
 ```
@@ -388,7 +388,7 @@ Matlantis環境でPythonスクリプトを実行します。
 
 **リモート（Matlantis環境）:**
 ```
-~/.matlantis-jobs/
+~/mms-jobs/
   └── {job_id}/              # ジョブごとのディレクトリ
       ├── run.py             # アップロードされたスクリプト
       ├── data/              # アップロードされたデータ
@@ -446,7 +446,7 @@ mms_runs
 
 - スクリプトが非ゼロの終了コードを返した場合、タスクは `failed` となる
 - エラー情報は `get_last_result()` の `error` と `traceback` フィールドに記録される
-- リモートログは常に `~/.matlantis-jobs/{job_id}/execution.log` に保存される
+- リモートログは常に `~/mms-jobs/{job_id}/execution.log` に保存される
 
 ## Python API（直接利用）
 

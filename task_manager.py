@@ -198,11 +198,11 @@ class MatlantisTaskManager:
         Notes: 以下のような流れで処理する
             - 接続を確立する
             - ローカルのディレクトリを、リモートにアップロードする
-                - リモートのディレクトリ: `~/.matlantis-jobs/{job_id}`
+                - リモートのディレクトリ: `~/mms-jobs/{job_id}`
                 - 各ジョブごとにディレクトリとしてまとまっているので、比較的管理がしやすいかも
             - リモートのPythonスクリプトを実行する
-                - スクリプトのパス: `~/.matlantis-jobs/{job_id}/{script_name}`
-                - ログ出力: `~/.matlantis-jobs/{job_id}/execution.log`
+                - スクリプトのパス: `~/mms-jobs/{job_id}/{script_name}`
+                - ログ出力: `~/mms-jobs/{job_id}/execution.log`
             - リモートの結果をローカルにダウンロードする
                 - ローカルの、`./runs/{job_id}`に結果をまとめる
             - 終了処理
@@ -259,7 +259,7 @@ class MatlantisTaskManager:
             self._update_job(progress_pct=20)
 
             # リモート作業ディレクトリを設定
-            remote_work_dir = f"~/.matlantis-jobs/{job_id}"
+            remote_work_dir = f"~/mms-jobs/{job_id}"
 
             # ディレクトリをアップロード
             ssh_service.upload_directory(
