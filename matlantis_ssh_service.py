@@ -58,6 +58,7 @@ class MatlantisSSHService:
                 port=local_port,
                 connect_kwargs={"key_filename": identity_file}
             )
+            self.ssh_connection.open() # 明示的に接続を開く
             self.is_connected = True
         except Exception as e:
             self.disconnect()
