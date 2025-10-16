@@ -1,3 +1,24 @@
+"""
+{
+    "mcpServers": {
+        "long-sleep": {
+            "command": "uv",
+            "args": [
+                "--directory",
+                "matlantis-mcp-serverがあるディレクトリのパス",
+                "run",
+                "server.py"
+            ],
+            "alwaysAllow": [
+                "long_sleep"
+            ],
+            "disabled": false
+        }
+    }
+}
+
+"""
+
 # server.py
 import asyncio
 from datetime import datetime
