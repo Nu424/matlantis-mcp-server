@@ -11,8 +11,14 @@ from fabric import Connection
 
 class MatlantisSSHService:
     # 転送時に無視するパターン
-    DEFAULT_IGNORE = {'.git', '.venv', '__pycache__',
-                      '.ipynb_checkpoints', '.DS_Store', 'mms_runs'}
+    DEFAULT_IGNORE = {
+        ".git",
+        ".venv",
+        "__pycache__",
+        ".ipynb_checkpoints",
+        ".DS_Store",
+        "mms_runs",
+    }
 
     def __init__(self):
         self.is_connected = False  # SSH接続が成立しているかどうか
@@ -22,14 +28,16 @@ class MatlantisSSHService:
     # ----------
     # ---SSH接続・切断
     # ----------
-    def connect(self,
-                websocat_bin_path: str,
-                matlantis_domain: str,
-                matlantis_user_id: str,
-                notebook_pre_shared_key: str,
-                user_name: str,
-                identity_file: str,
-                local_port: int = 2222):
+    def connect(
+        self,
+        websocat_bin_path: str,
+        matlantis_domain: str,
+        matlantis_user_id: str,
+        notebook_pre_shared_key: str,
+        user_name: str,
+        identity_file: str,
+        local_port: int = 2222,
+    ):
         """
         リモートのMatlantis環境にSSH接続する
 
@@ -44,21 +52,23 @@ class MatlantisSSHService:
         """
         try:
             # ---websocatを、ローカルTCPリスンの形で起動する
-            self.websocat_proc = subprocess.Popen([
-                websocat_bin_path,
-                "--binary",
-                f'-H=cookie: matlantis-notebook-pre-shared-key={notebook_pre_shared_key}',
-                f"tcp-l:0.0.0.0:{local_port}",  # 接続をローカルで待つ
-                f"wss://{matlantis_domain}/nb/{matlantis_user_id}/default/api/ssh-over-ws"
-            ])
+            self.websocat_proc = subprocess.Popen(
+                [
+                    websocat_bin_path,
+                    "--binary",
+                    f"-H=cookie: matlantis-notebook-pre-shared-key={notebook_pre_shared_key}",
+                    f"tcp-l:0.0.0.0:{local_port}",  # 接続をローカルで待つ
+                    f"wss://{matlantis_domain}/nb/{matlantis_user_id}/default/api/ssh-over-ws",
+                ]
+            )
             # ---FabricでSSH接続する
             self.ssh_connection = Connection(
                 host="127.0.0.1",
                 user=user_name,
                 port=local_port,
-                connect_kwargs={"key_filename": identity_file}
+                connect_kwargs={"key_filename": identity_file},
             )
-            self.ssh_connection.open() # 明示的に接続を開く
+            self.ssh_connection.open()  # 明示的に接続を開く
             self.is_connected = True
         except Exception as e:
             self.disconnect()
@@ -115,9 +125,9 @@ class MatlantisSSHService:
         """'~' をリモートのHOMEで展開した絶対パスを返す（先頭の '~' のみ対応）"""
         if not path:
             return path
-        if path == '~':
+        if path == "~":
             return self._get_remote_home()
-        if path.startswith('~/'):
+        if path.startswith("~/"):
             return self._remote_path_join(self._get_remote_home(), path[2:])
         return path
 
@@ -133,6 +143,7 @@ class MatlantisSSHService:
         """リモートパスがディレクトリかどうかを確認する"""
         try:
             import stat
+
             return stat.S_ISDIR(sftp.stat(path).st_mode)
         except IOError:
             return False
@@ -155,7 +166,7 @@ class MatlantisSSHService:
     # ---リモートのPython環境確認
     def _detect_remote_python(self, priority_version: str = None) -> str:
         """リモートのPythonコマンドを検出する
-        
+
         ~/.py39/bin/python3, ~/.py310/bin/python3 等を探索し、
         最新のバージョンのPythonを優先して返す。
         見つからない場合は which python3 || which python にフォールバックする。
@@ -197,7 +208,7 @@ which python3 2>/dev/null || which python 2>/dev/null
         if not local_path.is_dir():
             raise ValueError(f"{local_path} はディレクトリではありません")
 
-        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             for root, dirs, files in os.walk(local_path):
                 # 無視対象のディレクトリを除外
                 dirs[:] = [d for d in dirs if not self._should_ignore(d)]
@@ -215,7 +226,9 @@ which python3 2>/dev/null || which python 2>/dev/null
     # ----------
     # ---各種機能
     # ----------
-    def upload_directory(self, local_path: str, remote_path: str, priority_version: str = None):
+    def upload_directory(
+        self, local_path: str, remote_path: str, priority_version: str = None
+    ):
         """
         ローカルのディレクトリをリモートにアップロードする
 
@@ -238,14 +251,16 @@ which python3 2>/dev/null || which python 2>/dev/null
 
         try:
             # 1. ローカルで一時zipファイルを作成
-            with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as tmp:
+            with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
                 local_zip = tmp.name
 
             self._create_zip_from_directory(str(local_path), local_zip)
 
             # 2. リモートの一時ディレクトリとzipパスを準備（HOME を絶対パスとして解決）
             remote_home = self._get_remote_home()
-            remote_tmp_dir = self._remote_path_join(remote_home, '.matlantis-ssh-service', 'tmp')
+            remote_tmp_dir = self._remote_path_join(
+                remote_home, ".matlantis-ssh-service", "tmp"
+            )
             self._execute_command(f"mkdir -p '{remote_tmp_dir}'")
 
             remote_zip = f"{remote_tmp_dir}/upload_{uuid.uuid4().hex}.zip"
@@ -268,7 +283,7 @@ target_path = os.path.expanduser(os.path.expandvars('{expanded_remote_path}'))
 with zipfile.ZipFile(zip_path, 'r') as zf:
     zf.extractall(target_path)
 """
-            self._execute_command(f"{python_cmd} -c \"{unzip_script}\"")
+            self._execute_command(f'{python_cmd} -c "{unzip_script}"')
 
             # 6. リモートの一時zipファイルを削除
             self._execute_command(f"rm -f {remote_zip}")
@@ -280,7 +295,13 @@ with zipfile.ZipFile(zip_path, 'r') as zf:
 
             sftp.close()
 
-    def download_directory(self, remote_path: str, local_path: str, allow_overwrite: bool = False, priority_version: str = None):
+    def download_directory(
+        self,
+        remote_path: str,
+        local_path: str,
+        allow_overwrite: bool = False,
+        priority_version: str = None,
+    ):
         """
         リモートのディレクトリをローカルにダウンロードする
 
@@ -307,9 +328,12 @@ with zipfile.ZipFile(zip_path, 'r') as zf:
             # ディレクトリが存在し、中身がある場合はエラー
             if local_path.is_dir() and any(local_path.iterdir()):
                 raise ValueError(
-                    f"ローカルパス {local_path} は既に存在し中身があります。上書きする場合は allow_overwrite=True を指定してください")
+                    f"ローカルパス {local_path} は既に存在し中身があります。上書きする場合は allow_overwrite=True を指定してください"
+                )
             elif local_path.is_file():
-                raise ValueError(f"ローカルパス {local_path} はファイルとして存在します")
+                raise ValueError(
+                    f"ローカルパス {local_path} はファイルとして存在します"
+                )
 
         remote_zip = None
         local_zip = None
@@ -318,7 +342,9 @@ with zipfile.ZipFile(zip_path, 'r') as zf:
             # 1. リモートでzipを作成
             python_cmd = self._detect_remote_python(priority_version)
             remote_home = self._get_remote_home()
-            remote_tmp_dir = self._remote_path_join(remote_home, '.matlantis-ssh-service', 'tmp')
+            remote_tmp_dir = self._remote_path_join(
+                remote_home, ".matlantis-ssh-service", "tmp"
+            )
             self._execute_command(f"mkdir -p '{remote_tmp_dir}'")
 
             remote_zip = f"{remote_tmp_dir}/download_{uuid.uuid4().hex}.zip"
@@ -350,10 +376,10 @@ with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
             arcname = os.path.relpath(file_path, base_path)
             zf.write(file_path, arcname)
 """
-            self._execute_command(f"{python_cmd} -c \"{zip_script}\"")
+            self._execute_command(f'{python_cmd} -c "{zip_script}"')
 
             # 2. ローカルに一時zipファイルを作成
-            with tempfile.NamedTemporaryFile(suffix='.zip', delete=False) as tmp:
+            with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
                 local_zip = tmp.name
 
             # 3. zipファイルをローカルにダウンロード
@@ -361,7 +387,7 @@ with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
 
             # 4. ローカルでzipを解凍
             local_path.mkdir(parents=True, exist_ok=True)
-            with zipfile.ZipFile(local_zip, 'r') as zf:
+            with zipfile.ZipFile(local_zip, "r") as zf:
                 zf.extractall(local_path)
 
             # 5. リモートの一時zipファイルを削除
@@ -374,7 +400,14 @@ with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
 
             sftp.close()
 
-    def execute_python_script(self, script_path: str, script_log_path: str = None, priority_version: str = None, python_path: str = None, pid_file: str = None):
+    def execute_python_script(
+        self,
+        script_path: str,
+        script_log_path: str = None,
+        priority_version: str = None,
+        python_path: str = None,
+        pid_file: str = None,
+    ):
         """
         リモートのPythonスクリプトを実行する
 
@@ -392,17 +425,17 @@ with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
             raise RuntimeError("SSH接続が成立していません")
 
         # パスの正規化（WindowsのバックスラッシュをPOSIXに）と ~ 展開
-        script_path_str = str(script_path).replace('\\', '/')
+        script_path_str = str(script_path).replace("\\", "/")
         expanded_script_path = self._expand_remote_path(script_path_str)
 
         expanded_log_path = None
         if script_log_path:
-            script_log_path_str = str(script_log_path).replace('\\', '/')
+            script_log_path_str = str(script_log_path).replace("\\", "/")
             expanded_log_path = self._expand_remote_path(script_log_path_str)
 
         expanded_pid_file = None
         if pid_file:
-            pid_file_str = str(pid_file).replace('\\', '/')
+            pid_file_str = str(pid_file).replace("\\", "/")
             expanded_pid_file = self._expand_remote_path(pid_file_str)
 
         # シェル用の安全な単一引用符クオート
@@ -415,9 +448,12 @@ with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
 
         # リモートスクリプトの存在確認
         check_result = self._execute_command(
-            f"test -f {quoted_script} && echo 'exists' || echo 'not_found'")
-        if check_result.stdout.strip() != 'exists':
-            raise FileNotFoundError(f"リモートスクリプト {expanded_script_path} が存在しません")
+            f"test -f {quoted_script} && echo 'exists' || echo 'not_found'"
+        )
+        if check_result.stdout.strip() != "exists":
+            raise FileNotFoundError(
+                f"リモートスクリプト {expanded_script_path} が存在しません"
+            )
 
         # Pythonコマンドの検出
         python_cmd = self._detect_remote_python(priority_version)
@@ -425,7 +461,6 @@ with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
         # PYTHONPATHを設定…実行ディレクトリを追加することで、実行ディレクトリ内のモジュールを参照できるようにする
         if python_path:
             python_cmd = f"PYTHONPATH={python_path} {python_cmd}"
-
 
         # 実行コマンドの構築
         if quoted_pid_file:
@@ -435,10 +470,10 @@ with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
             dir_cmds.append(f"mkdir -p $(dirname {quoted_pid_file})")
             if quoted_log:
                 dir_cmds.append(f"mkdir -p $(dirname {quoted_log})")
-            
+
             # リダイレクト部分
             redirect = f">> {quoted_log} 2>&1" if quoted_log else ">/dev/null 2>&1"
-            
+
             # PIDファイル付き実行コマンド
             # setsidで新しいセッション(=新しいプロセスグループ)を作成し、バックグラウンドで実行
             # セッションリーダーのPIDをファイルに記録し、waitで完了を待つ
@@ -481,22 +516,22 @@ wait "$child"
         if not self.is_connected:
             raise RuntimeError("SSH接続が成立していません")
 
-        expanded_pid_file = self._expand_remote_path(pid_file.replace('\\', '/'))
-        
+        expanded_pid_file = self._expand_remote_path(pid_file.replace("\\", "/"))
+
         def _sh_quote(p: str) -> str:
             return "'" + p.replace("'", "'\"'\"'") + "'"
-        
+
         quoted_pid_file = _sh_quote(expanded_pid_file)
-        
+
         # PIDファイルの存在確認と読み取り
         result = self._execute_command(
             f"test -f {quoted_pid_file} && cat {quoted_pid_file} || echo 'not_found'"
         )
-        
+
         pid_str = result.stdout.strip()
-        if pid_str == 'not_found':
+        if pid_str == "not_found":
             raise FileNotFoundError(f"PIDファイル {pid_file} が見つかりません")
-        
+
         try:
             pid = int(pid_str)
             if pid <= 0:
@@ -508,7 +543,7 @@ wait "$child"
     def terminate_by_pid_file(self, pid_file: str, grace_seconds: int = 10):
         """
         PIDファイルに記録されたプロセスグループを終了する
-        
+
         SIGTERM を送信し、grace_seconds 待機後もプロセスが生存していれば SIGKILL を送信する。
 
         Args:
@@ -525,47 +560,54 @@ wait "$child"
         try:
             # PIDを読み取る
             pid = self._read_remote_pid(pid_file)
-            
+
             # プロセスグループIDを取得（通常はセッションリーダーのPIDと同じ）
-            pgid_result = self._execute_command(f"ps -o pgid= -p {pid} 2>/dev/null || echo ''")
+            pgid_result = self._execute_command(
+                f"ps -o pgid= -p {pid} 2>/dev/null || echo ''"
+            )
             pgid_str = pgid_result.stdout.strip()
-            
+
             if not pgid_str:
                 # プロセスが既に終了している可能性
                 print(f"プロセス {pid} は既に終了しているか、見つかりません")
                 return
-            
+
             try:
                 pgid = int(pgid_str)
             except ValueError:
                 print(f"PGIDの取得に失敗しました: {pgid_str}")
                 return
-            
+
             # SIGTERMを送信（プロセスグループ全体に）
             print(f"プロセスグループ {pgid} に SIGTERM を送信します...")
             self._execute_command(f"kill -TERM -{pgid} 2>/dev/null || true")
-            
+
             # grace_seconds 間、プロセスの終了を待つ
             import time
+
             for i in range(grace_seconds):
                 time.sleep(1)
-                check_result = self._execute_command(f"ps -p {pid} >/dev/null 2>&1 && echo 'alive' || echo 'dead'")
-                if check_result.stdout.strip() == 'dead':
+                check_result = self._execute_command(
+                    f"ps -p {pid} >/dev/null 2>&1 && echo 'alive' || echo 'dead'"
+                )
+                if check_result.stdout.strip() == "dead":
                     print(f"プロセス {pid} は正常に終了しました")
                     return
-            
+
             # まだ生存している場合はSIGKILLを送信
             print(f"プロセスグループ {pgid} に SIGKILL を送信します...")
             self._execute_command(f"kill -KILL -{pgid} 2>/dev/null || true")
-            
+
             # 最終確認
             time.sleep(1)
-            check_result = self._execute_command(f"ps -p {pid} >/dev/null 2>&1 && echo 'alive' || echo 'dead'")
-            if check_result.stdout.strip() == 'dead':
+            check_result = self._execute_command(
+                f"ps -p {pid} >/dev/null 2>&1 && echo 'alive' || echo 'dead'"
+            )
+            if check_result.stdout.strip() == "dead":
                 print(f"プロセス {pid} は強制終了されました")
             else:
                 print(f"警告: プロセス {pid} の終了を確認できませんでした")
-                
+
         except FileNotFoundError as e:
             print(f"警告: {e}")
         except Exception as e:

@@ -41,7 +41,11 @@ async def wait_for_task_completion(seconds: int, ctx: Context) -> str:
             await ctx.info(
                 f"Status: {state}, Stage: {status.get('stage')}, Progress: {status.get('progress_pct')}%"
             )
-        elif state in (TaskStatus.SUCCEEDED.value, TaskStatus.FAILED.value, TaskStatus.CANCELLED.value):
+        elif state in (
+            TaskStatus.SUCCEEDED.value,
+            TaskStatus.FAILED.value,
+            TaskStatus.CANCELLED.value,
+        ):
             await ctx.info(
                 f"Status: {state}, Stage: {status.get('stage')}, Progress: {status.get('progress_pct')}%"
             )

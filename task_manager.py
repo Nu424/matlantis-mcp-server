@@ -19,6 +19,7 @@ from matlantis_ssh_service import MatlantisSSHService
 
 load_dotenv()
 
+
 class TaskStatus(Enum):
     """タスクの実行ステータス"""
 
@@ -348,7 +349,9 @@ class MatlantisTaskManager:
 
             # ディレクトリをアップロード
             ssh_service.upload_directory(
-                local_path=directory_path, remote_path=remote_work_dir, priority_version=priority_version
+                local_path=directory_path,
+                remote_path=remote_work_dir,
+                priority_version=priority_version,
             )
 
             # キャンセルチェック
@@ -370,7 +373,9 @@ class MatlantisTaskManager:
             # WindowsのバックスラッシュをPOSIXのスラッシュに正規化
             script_relative_path_posix = script_relative_path.replace("\\", "/")
             # リモート(Linux)側のパス結合はPOSIXで行う
-            remote_script_path = posixpath.join(remote_work_dir, script_relative_path_posix)
+            remote_script_path = posixpath.join(
+                remote_work_dir, script_relative_path_posix
+            )
             remote_log_path = posixpath.join(remote_work_dir, "execution.log")
 
             # カレントディレクトリをリモートに移動
@@ -378,11 +383,11 @@ class MatlantisTaskManager:
 
             # スクリプトを実行（PIDファイルを指定）
             result = ssh_service.execute_python_script(
-                script_path=remote_script_path, 
-                script_log_path=remote_log_path, 
-                priority_version=priority_version, 
+                script_path=remote_script_path,
+                script_log_path=remote_log_path,
+                priority_version=priority_version,
                 python_path=".",
-                pid_file=pid_file
+                pid_file=pid_file,
             )
 
             self._update_job(progress_pct=70)
@@ -436,7 +441,7 @@ class MatlantisTaskManager:
         except Exception as e:
             # キャンセルされたかどうかを確認
             is_cancelled = self._cancel_event.is_set()
-            
+
             error_message = str(e)
             error_traceback = traceback.format_exc()
 
@@ -464,7 +469,9 @@ class MatlantisTaskManager:
                     job_id=job_id,
                     message=self._cancel_reason or "タスクがキャンセルされました",
                     remote_log_path=remote_log_path,
-                    local_artifacts_path=str(local_artifacts_dir) if local_artifacts_dir else None,
+                    local_artifacts_path=str(local_artifacts_dir)
+                    if local_artifacts_dir
+                    else None,
                 )
             else:
                 # 通常のエラー
@@ -473,7 +480,9 @@ class MatlantisTaskManager:
                     error_message=error_message,
                     error_traceback=error_traceback,
                     remote_log_path=remote_log_path,
-                    local_artifacts_path=str(local_artifacts_dir) if local_artifacts_dir else None,
+                    local_artifacts_path=str(local_artifacts_dir)
+                    if local_artifacts_dir
+                    else None,
                 )
 
         finally:
@@ -483,7 +492,7 @@ class MatlantisTaskManager:
                     ssh_service.disconnect()
                 except Exception:
                     pass
-            
+
             # クリーンアップ
             with self._lock:
                 self._ssh_service = None
