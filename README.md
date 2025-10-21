@@ -25,6 +25,7 @@ Matlantis環境で計算化学シミュレーションコードを実行する�
 - **ディレクトリダウンロード**: リモートの実行結果をローカルへダウンロード
 - **Pythonスクリプト実行**: リモート環境でPythonスクリプトを実行し、ログと成果物を取得
 - **タスク管理**: バックグラウンドでの単一タスク実行と進捗管理
+- **タスクキャンセル**: 実行中のタスクを強制終了（SIGTERM → 10秒猶予 → SIGKILL）
 - **失敗時の成果物保存**: アップロード完了後にエラーが発生しても、リモート作業ディレクトリ一式をローカルの `mms_runs/{job_id}` に自動保存
 - **MCPプロトコル対応**: Cursor、Claude Desktopなどのクライアントから直接利用可能
 
@@ -83,10 +84,12 @@ Matlantis環境で計算化学シミュレーションコードを実行する�
 5. [downloading] 実行結果をローカルにダウンロード
    ↓             ローカルディレクトリ: {directory_path}/mms_runs/{job_id}/
    ↓
-6. [finalizing] SSH切断・結果記録 (succeeded / failed)
+6. [finalizing] SSH切断・結果記録 (succeeded / failed / cancelled)
 ```
 
-備考: アップロード完了後のエラー時も Step 5（downloading）を試行し、ローカルの `mms_runs/{job_id}` にログや生成物を保存します。
+備考: 
+- アップロード完了後のエラー時も Step 5（downloading）を試行し、ローカルの `mms_runs/{job_id}` にログや生成物を保存します。
+- 実行中のタスクは `terminate_current_task` で強制終了できます。
 
 ## 前提条件
 
@@ -189,7 +192,8 @@ IDENTITY_FILE=~/.ssh/id_rsa
         "wait_for_task_completion",
         "execute_python_script_in_matlantis",
         "get_execution_status",
-        "get_last_result"
+        "get_last_result",
+        "terminate_current_task"
       ],
       "disabled": false
     }
@@ -203,7 +207,7 @@ MCPクライアントを再起動すると、サーバーが自動的に起動�
 
 ```
 MCP server 'matlantis-mcp-server' connected successfully
-Available tools: wait_for_task_completion, execute_python_script_in_matlantis, get_execution_status, get_last_result
+Available tools: wait_for_task_completion, execute_python_script_in_matlantis, get_execution_status, get_last_result, terminate_current_task
 ```
 
 ### 3. 使用例
@@ -286,6 +290,7 @@ Matlantis環境でPythonスクリプトを実行します。
 | `running`    | 実行中             |
 | `succeeded`  | 成功               |
 | `failed`     | 失敗               |
+| `cancelled`  | キャンセル         |
 
 **ステージ値（`status=running` の場合）:**
 
@@ -333,6 +338,21 @@ Matlantis環境でPythonスクリプトを実行します。
 }
 ```
 
+**戻り値（キャンセル時）:**
+
+```json
+{
+  "available": true,
+  "job_id": "a1b2c3d4e5f6",
+  "status": "cancelled",
+  "message": "ユーザーによるキャンセル",
+  "error": null,
+  "traceback": null,
+  "remote_log_path": "~/mms-jobs/a1b2c3d4e5f6/execution.log",
+  "local_artifacts_path": "C:/projects/my_simulation/mms_runs/a1b2c3d4e5f6"
+}
+```
+
 **戻り値（結果なし）:**
 
 ```json
@@ -346,7 +366,7 @@ Matlantis環境でPythonスクリプトを実行します。
 
 ### 4. `wait_for_task_completion`
 
-タスクが完了するまで指定秒数の間待機します。待機中は1秒ごとに進捗を報告し、タスクが `succeeded` または `failed` になった時点で即座に終了します。指定時間内に完了しなかった場合はタイムアウトとして終了します（その場合は `get_execution_status` を再確認してください）。
+タスクが完了するまで指定秒数の間待機します。待機中は1秒ごとに進捗を報告し、タスクが `succeeded`、`failed`、または `cancelled` になった時点で即座に終了します。指定時間内に完了しなかった場合はタイムアウトとして終了します（その場合は `get_execution_status` を再確認してください）。
 
 **パラメータ:**
 
@@ -363,7 +383,48 @@ Matlantis環境でPythonスクリプトを実行します。
 **備考:**
 - 待機中、内部的に `get_execution_status()` 相当の状態を確認します。
 - 進捗はMCPクライアント側のプログレスUIやログに反映されます。
-- 早期完了（成功/失敗）時は即座に戻ります。時間内に終わらない場合は時間経過で戻ります。
+- 早期完了（成功/失敗/キャンセル）時は即座に戻ります。時間内に終わらない場合は時間経過で戻ります。
+
+### 5. `terminate_current_task`
+
+実行中のタスクを強制終了します。
+
+**パラメータ:**
+
+| パラメータ       | 型   | 説明                                                  | デフォルト値 |
+|------------------|------|-------------------------------------------------------|-------------|
+| `reason`         | string | 終了理由（省略可）                                   | `""`        |
+| `grace_seconds`  | int    | SIGTERMからSIGKILLまでの猶予時間（秒）              | `10`        |
+
+**戻り値（受理時）:**
+
+```json
+{
+  "accepted": true,
+  "message": "タスクの終了を要求しました: ユーザーによるキャンセル"
+}
+```
+
+**戻り値（拒否時）:**
+
+```json
+{
+  "accepted": false,
+  "reason": "idle",
+  "message": "実行中のタスクがありません"
+}
+```
+
+**動作:**
+
+1. **実行中（executing）**: リモートプロセスにSIGTERMを送信 → 猶予時間待機 → 生存していればSIGKILLで強制終了
+2. **アップロード/ダウンロード中**: SSH接続を切断してI/O処理を中断
+3. **初期化/終了処理中**: キャンセルフラグを設定して早期終了
+
+**備考:**
+- キャンセルされたタスクの状態は `status: "cancelled"` として記録されます。
+- 複数回呼び出しても安全（冪等性）で、既にキャンセル要求済みの場合は `accepted: true` を返します。
+- キャンセル後も可能な限りログと成果物を `mms_runs/{job_id}` にダウンロードします。
 
 ## 利用ワークフロー
 
@@ -424,7 +485,10 @@ Matlantis環境でPythonスクリプトを実行します。
 
 - **同時実行数**: 1タスクのみ
 - **実行中の新規タスク**: 拒否され `{"accepted": false, "reason": "busy"}` が返される
-- **キャンセル機能**: 未実装（実行中のタスクは完了またはエラーまで待機が必要）
+- **キャンセル機能**: `terminate_current_task` で実行中のタスクを強制終了可能
+  - リモートプロセスのPID/PGIDを管理し、SIGTERM → 10秒猶予 → SIGKILL でエスカレーション
+  - アップロード/ダウンロード中はSSH接続を切断して中断
+  - キャンセル後も可能な限りログと成果物をダウンロード
 - **履歴保持**: 最新のタスク結果のみ保持（古い結果は上書きされる）
 
 ### ファイル転送
@@ -554,11 +618,38 @@ service.download_directory(
 
 ```python
 result = service.execute_python_script(
-    script_path: str,              # リモートスクリプトパス
-    script_log_path: str = None    # リモートログパス（省略可）
+    script_path: str,               # リモートスクリプトパス
+    script_log_path: str = None,    # リモートログパス（省略可）
+    priority_version: str = None,   # 優先Pythonバージョン（例: "39", "310"）
+    python_path: str = None,        # PYTHONPATHに追加するパス
+    pid_file: str = None            # PIDファイルパス（省略時は従来の動作）
 )
 # 戻り値: fabric.Result (stdout, stderr, return_code 属性を持つ)
 ```
+
+**`pid_file` の動作:**
+- 指定時: 新しいセッション（`setsid`）でスクリプトを起動し、プロセスグループリーダーのPIDをファイルに記録
+- これにより `terminate_by_pid_file()` でプロセスグループ全体を終了可能
+- 省略時: 従来どおりの直接実行
+
+#### `MatlantisSSHService.terminate_by_pid_file()`
+
+```python
+service.terminate_by_pid_file(
+    pid_file: str,           # PIDファイルのパス（リモート）
+    grace_seconds: int = 10  # SIGTERMからSIGKILLまでの猶予時間
+)
+```
+
+**動作:**
+1. PIDファイルからプロセスIDを読み取る
+2. PGIDを取得し、プロセスグループにSIGTERMを送信
+3. `grace_seconds` 間、プロセスの終了を待機
+4. まだ生存している場合はSIGKILLで強制終了
+
+**備考:**
+- ベストエフォート実行（PIDファイルが存在しない場合でも例外を投げずに処理を継続）
+- プロセスが既に終了している場合は即座に完了
 
 ## トラブルシューティング
 
@@ -690,16 +781,29 @@ if __name__ == "__main__":
   - 実行ステージと進捗の管理
   - 結果の保持（最新1件）
   - エラーハンドリングとトレースバック記録
+  - タスクキャンセルの管理
 
 **実行フローの実装:**
 ```python
 def _execute(self, job_id: str, script_path: str, directory_path: str):
+    # 0. キャンセルイベントをクリア
     # 1. 環境変数の読み込みと検証
-    # 2. SSH接続の確立
+    # 2. SSH接続の確立 → ssh_service, pid_file を保存
     # 3. [uploading] ディレクトリのアップロード
-    # 4. [executing] スクリプトの実行
+    #    ※ 各ステージ間でキャンセルチェック
+    # 4. [executing] スクリプトの実行（pid_file を指定）
     # 5. [downloading] 結果のダウンロード
-    # 6. [finalizing] 切断と結果記録
+    # 6. [finalizing] 切断と結果記録（succeeded/failed/cancelled）
+```
+
+**キャンセル機構:**
+```python
+def terminate_current_task(self, reason: str = "", grace_seconds: int = 10):
+    # キャンセルイベントをセット
+    # ステージに応じた処理:
+    #   - executing: terminate_by_pid_file() でリモートプロセスを終了
+    #   - uploading/downloading: disconnect() でSSH接続を切断
+    #   - その他: フラグをセットして早期終了
 ```
 
 **ステージ更新:**
@@ -718,7 +822,8 @@ SSH接続、ファイル転送、スクリプト実行のユーティリティ�
 - **主な責務**:
   - websocat経由のSSH接続管理
   - ZIP圧縮によるディレクトリ転送（アップロード/ダウンロード）
-  - リモートPythonスクリプトの実行
+  - リモートPythonスクリプトの実行（PID管理機能付き）
+  - プロセスグループの終了制御
   - リモートパスの展開（`~` など）
 
 **ZIP転送の実装:**
@@ -734,6 +839,21 @@ SSH接続、ファイル転送、スクリプト実行のユーティリティ�
 2. SFTPでZIPファイルをローカルに転送
 3. ローカルでZIPを展開
 4. 一時ファイルをクリーンアップ
+```
+
+**PID管理付き実行:**
+```python
+# pid_file を指定した場合
+1. setsid で新しいセッション（プロセスグループ）を作成
+2. バックグラウンドでスクリプトを実行
+3. セッションリーダーのPIDをファイルに記録
+4. wait で子プロセスの終了を待機（SSH接続をブロッキング状態に保つ）
+
+# terminate_by_pid_file() による終了
+1. PIDファイルからPIDを読み取る
+2. PGIDを取得し、kill -TERM -$PGID を実行
+3. grace_seconds 間ポーリングして終了を待機
+4. 生存していれば kill -KILL -$PGID で強制終了
 ```
 
 ### アーキテクチャの設計判断

@@ -374,13 +374,16 @@ with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
 
             sftp.close()
 
-    def execute_python_script(self, script_path: str, script_log_path: str = None, priority_version: str = None, python_path: str = None):
+    def execute_python_script(self, script_path: str, script_log_path: str = None, priority_version: str = None, python_path: str = None, pid_file: str = None):
         """
         リモートのPythonスクリプトを実行する
 
         Args:
             script_path(str): リモートのPythonスクリプトパス（絶対パスまたは相対パス）
             script_log_path(str): スクリプトのログを保存するパス(リモート)。Noneの場合はログを保存しない。
+            priority_version(str): 優先するPythonバージョン
+            python_path(str): PYTHONPATHに追加するパス
+            pid_file(str): PIDを保存するファイルのパス(リモート)。指定時は新しいセッションで起動し、プロセスグループIDをPIDファイルに記録する。
 
         Returns:
             fabric.Result: コマンド実行結果（stdout, stderr, return_code を含む）
@@ -397,12 +400,18 @@ with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
             script_log_path_str = str(script_log_path).replace('\\', '/')
             expanded_log_path = self._expand_remote_path(script_log_path_str)
 
+        expanded_pid_file = None
+        if pid_file:
+            pid_file_str = str(pid_file).replace('\\', '/')
+            expanded_pid_file = self._expand_remote_path(pid_file_str)
+
         # シェル用の安全な単一引用符クオート
         def _sh_quote(p: str) -> str:
             return "'" + p.replace("'", "'\"'\"'") + "'"
 
         quoted_script = _sh_quote(expanded_script_path)
         quoted_log = _sh_quote(expanded_log_path) if expanded_log_path else None
+        quoted_pid_file = _sh_quote(expanded_pid_file) if expanded_pid_file else None
 
         # リモートスクリプトの存在確認
         check_result = self._execute_command(
@@ -412,18 +421,152 @@ with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
 
         # Pythonコマンドの検出
         python_cmd = self._detect_remote_python(priority_version)
+
+        # PYTHONPATHを設定…実行ディレクトリを追加することで、実行ディレクトリ内のモジュールを参照できるようにする
         if python_path:
             python_cmd = f"PYTHONPATH={python_path} {python_cmd}"
+
+
         # 実行コマンドの構築
-        # -u オプションで標準出力のバッファリングを無効化
-        if quoted_log:
-            # ログファイルに出力する場合
-            command = f"{python_cmd} -u {quoted_script} > {quoted_log} 2>&1"
+        if quoted_pid_file:
+            # PIDファイル指定時: 新しいセッションで起動し、プロセスグループリーダーのPIDを記録
+            # ディレクトリ作成コマンド
+            dir_cmds = []
+            dir_cmds.append(f"mkdir -p $(dirname {quoted_pid_file})")
+            if quoted_log:
+                dir_cmds.append(f"mkdir -p $(dirname {quoted_log})")
+            
+            # リダイレクト部分
+            redirect = f">> {quoted_log} 2>&1" if quoted_log else ">/dev/null 2>&1"
+            
+            # PIDファイル付き実行コマンド
+            # setsidで新しいセッション(=新しいプロセスグループ)を作成し、バックグラウンドで実行
+            # セッションリーダーのPIDをファイルに記録し、waitで完了を待つ
+            command = f"""
+{'; '.join(dir_cmds)}
+rm -f {quoted_pid_file}
+setsid bash -lc '{python_cmd} -u {quoted_script} {redirect}' &
+child=$!
+echo -n "$child" > {quoted_pid_file}
+wait "$child"
+""".strip()
         else:
-            # 標準出力/エラーを取得する場合
-            command = f"{python_cmd} -u {quoted_script}"
+            # 従来の動作: -u オプションで標準出力のバッファリングを無効化
+            if quoted_log:
+                # ログファイルに出力する場合
+                command = f"{python_cmd} -u {quoted_script} > {quoted_log} 2>&1"
+            else:
+                # 標準出力/エラーを取得する場合
+                command = f"{python_cmd} -u {quoted_script}"
 
         # スクリプトを実行（エラーでも例外を投げない設定）
         result = self._execute_command(command)
 
         return result
+
+    def _read_remote_pid(self, pid_file: str) -> int:
+        """
+        リモートのPIDファイルからPIDを読み取る
+
+        Args:
+            pid_file(str): PIDファイルのパス（リモート）
+
+        Returns:
+            int: PID
+
+        Raises:
+            FileNotFoundError: PIDファイルが存在しない
+            ValueError: PIDファイルの内容が不正
+        """
+        if not self.is_connected:
+            raise RuntimeError("SSH接続が成立していません")
+
+        expanded_pid_file = self._expand_remote_path(pid_file.replace('\\', '/'))
+        
+        def _sh_quote(p: str) -> str:
+            return "'" + p.replace("'", "'\"'\"'") + "'"
+        
+        quoted_pid_file = _sh_quote(expanded_pid_file)
+        
+        # PIDファイルの存在確認と読み取り
+        result = self._execute_command(
+            f"test -f {quoted_pid_file} && cat {quoted_pid_file} || echo 'not_found'"
+        )
+        
+        pid_str = result.stdout.strip()
+        if pid_str == 'not_found':
+            raise FileNotFoundError(f"PIDファイル {pid_file} が見つかりません")
+        
+        try:
+            pid = int(pid_str)
+            if pid <= 0:
+                raise ValueError(f"不正なPID: {pid}")
+            return pid
+        except ValueError as e:
+            raise ValueError(f"PIDファイルの内容が不正です: {pid_str}") from e
+
+    def terminate_by_pid_file(self, pid_file: str, grace_seconds: int = 10):
+        """
+        PIDファイルに記録されたプロセスグループを終了する
+        
+        SIGTERM を送信し、grace_seconds 待機後もプロセスが生存していれば SIGKILL を送信する。
+
+        Args:
+            pid_file(str): PIDファイルのパス（リモート）
+            grace_seconds(int): SIGTERMからSIGKILLまでの猶予時間（秒）
+
+        Raises:
+            RuntimeError: SSH接続が成立していない
+            FileNotFoundError: PIDファイルが見つからない（best-effortのため警告のみ）
+        """
+        if not self.is_connected:
+            raise RuntimeError("SSH接続が成立していません")
+
+        try:
+            # PIDを読み取る
+            pid = self._read_remote_pid(pid_file)
+            
+            # プロセスグループIDを取得（通常はセッションリーダーのPIDと同じ）
+            pgid_result = self._execute_command(f"ps -o pgid= -p {pid} 2>/dev/null || echo ''")
+            pgid_str = pgid_result.stdout.strip()
+            
+            if not pgid_str:
+                # プロセスが既に終了している可能性
+                print(f"プロセス {pid} は既に終了しているか、見つかりません")
+                return
+            
+            try:
+                pgid = int(pgid_str)
+            except ValueError:
+                print(f"PGIDの取得に失敗しました: {pgid_str}")
+                return
+            
+            # SIGTERMを送信（プロセスグループ全体に）
+            print(f"プロセスグループ {pgid} に SIGTERM を送信します...")
+            self._execute_command(f"kill -TERM -{pgid} 2>/dev/null || true")
+            
+            # grace_seconds 間、プロセスの終了を待つ
+            import time
+            for i in range(grace_seconds):
+                time.sleep(1)
+                check_result = self._execute_command(f"ps -p {pid} >/dev/null 2>&1 && echo 'alive' || echo 'dead'")
+                if check_result.stdout.strip() == 'dead':
+                    print(f"プロセス {pid} は正常に終了しました")
+                    return
+            
+            # まだ生存している場合はSIGKILLを送信
+            print(f"プロセスグループ {pgid} に SIGKILL を送信します...")
+            self._execute_command(f"kill -KILL -{pgid} 2>/dev/null || true")
+            
+            # 最終確認
+            time.sleep(1)
+            check_result = self._execute_command(f"ps -p {pid} >/dev/null 2>&1 && echo 'alive' || echo 'dead'")
+            if check_result.stdout.strip() == 'dead':
+                print(f"プロセス {pid} は強制終了されました")
+            else:
+                print(f"警告: プロセス {pid} の終了を確認できませんでした")
+                
+        except FileNotFoundError as e:
+            print(f"警告: {e}")
+        except Exception as e:
+            print(f"終了処理中にエラーが発生しました: {e}")

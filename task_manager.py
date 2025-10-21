@@ -26,6 +26,7 @@ class TaskStatus(Enum):
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 @dataclass
@@ -66,6 +67,12 @@ class MatlantisTaskManager:
         self._current_job: Optional[MatlantisJob] = None
         self._last_result: Optional[MatlantisJobResult] = None
         self._execute_thread: Optional[threading.Thread] = None
+        # キャンセル機構
+        self._cancel_event = threading.Event()
+        self._ssh_service: Optional[MatlantisSSHService] = None
+        self._remote_work_dir: Optional[str] = None
+        self._pid_file: Optional[str] = None
+        self._cancel_reason: Optional[str] = None
 
     def submit(self, script_path: str, directory_path: str) -> dict:
         """
@@ -184,6 +191,63 @@ class MatlantisTaskManager:
             result_dict["available"] = True
             return result_dict
 
+    def terminate_current_task(self, reason: str = "", grace_seconds: int = 10) -> dict:
+        """
+        実行中のタスクを強制終了する
+
+        Args:
+            reason: 終了理由
+            grace_seconds: SIGTERMからSIGKILLまでの猶予時間（秒）
+
+        Returns:
+            dict: {"accepted": bool, "reason": str | None, "message": str}
+        """
+        with self._lock:
+            # 実行中でなければ拒否
+            if self._status != TaskStatus.RUNNING:
+                return {
+                    "accepted": False,
+                    "reason": "idle",
+                    "message": "実行中のタスクがありません",
+                }
+
+            # 既にキャンセル要求済みの場合は冪等に処理
+            if self._cancel_event.is_set():
+                return {
+                    "accepted": True,
+                    "message": "既にキャンセル要求を受け付けています",
+                }
+
+            # キャンセルイベントをセット
+            self._cancel_event.set()
+            self._cancel_reason = reason or "ユーザーによるキャンセル"
+
+            # 現在のステージとリソースをスナップショット
+            current_stage = self._current_job.stage if self._current_job else None
+            ssh_service = self._ssh_service
+            pid_file = self._pid_file
+
+        # ロックを解放した後、ステージに応じた処理を実行
+        try:
+            if current_stage == "executing" and ssh_service and pid_file:
+                # 実行中の場合はリモートプロセスを終了
+                print(f"実行中のタスクを終了します: {pid_file}")
+                ssh_service.terminate_by_pid_file(pid_file, grace_seconds)
+            elif current_stage in ("uploading", "downloading") and ssh_service:
+                # アップロード/ダウンロード中の場合は接続を切断してI/Oを中断
+                print(f"{current_stage} 中のタスクを中断するため接続を切断します")
+                try:
+                    ssh_service.disconnect()
+                except Exception as e:
+                    print(f"接続切断中にエラー: {e}")
+        except Exception as e:
+            print(f"終了処理中にエラーが発生しました: {e}")
+
+        return {
+            "accepted": True,
+            "message": f"タスクの終了を要求しました: {self._cancel_reason}",
+        }
+
     # ----------
     # ---内部関数
     # ----------
@@ -214,6 +278,11 @@ class MatlantisTaskManager:
         remote_work_dir = None
         local_artifacts_dir = None
         remote_log_path = None
+        pid_file = None
+
+        # キャンセルイベントをクリア
+        self._cancel_event.clear()
+        self._cancel_reason = None
 
         try:
             # 環境変数から接続情報を取得
@@ -258,20 +327,42 @@ class MatlantisTaskManager:
                 local_port=local_port,
             )
 
+            # SSH接続を保存（キャンセル時に使用）
+            with self._lock:
+                self._ssh_service = ssh_service
+
+            # キャンセルチェック
+            if self._cancel_event.is_set():
+                raise RuntimeError("タスクがキャンセルされました（接続後）")
+
             self._update_job(progress_pct=20)
 
             # リモート作業ディレクトリを設定
             remote_work_dir = f"~/mms-jobs/{job_id}"
+            pid_file = posixpath.join(remote_work_dir, "script.pid")
+
+            # パスを保存（キャンセル時に使用）
+            with self._lock:
+                self._remote_work_dir = remote_work_dir
+                self._pid_file = pid_file
 
             # ディレクトリをアップロード
             ssh_service.upload_directory(
                 local_path=directory_path, remote_path=remote_work_dir, priority_version=priority_version
             )
 
+            # キャンセルチェック
+            if self._cancel_event.is_set():
+                raise RuntimeError("タスクがキャンセルされました（アップロード後）")
+
             self._update_job(progress_pct=40)
 
             # --- Stage 2: 実行 ---
             self._update_job(stage="executing", progress_pct=50)
+
+            # キャンセルチェック
+            if self._cancel_event.is_set():
+                raise RuntimeError("タスクがキャンセルされました（実行前）")
 
             # スクリプトのリモートパスを構築
             # directory_pathを基準として、script_pathからの相対パスを計算
@@ -285,12 +376,20 @@ class MatlantisTaskManager:
             # カレントディレクトリをリモートに移動
             ssh_service._execute_command(f"cd {remote_work_dir}")
 
-            # スクリプトを実行
+            # スクリプトを実行（PIDファイルを指定）
             result = ssh_service.execute_python_script(
-                script_path=remote_script_path, script_log_path=remote_log_path, priority_version=priority_version, python_path="."
+                script_path=remote_script_path, 
+                script_log_path=remote_log_path, 
+                priority_version=priority_version, 
+                python_path=".",
+                pid_file=pid_file
             )
 
             self._update_job(progress_pct=70)
+
+            # キャンセルチェック（実行後）
+            if self._cancel_event.is_set():
+                raise RuntimeError("タスクがキャンセルされました（実行後）")
 
             # 実行結果をチェック
             if result.return_code != 0:
@@ -335,31 +434,47 @@ class MatlantisTaskManager:
             )
 
         except Exception as e:
-            # エラーを記録
+            # キャンセルされたかどうかを確認
+            is_cancelled = self._cancel_event.is_set()
+            
             error_message = str(e)
             error_traceback = traceback.format_exc()
 
-            # ---アップロード以降でエラーが起きた場合は、ログをダウンロードする
+            # ---アップロード以降でエラーが起きた場合は、ログをダウンロードする（best-effort）
             if self._current_job and self._current_job.progress_pct >= 40:
-                # ローカルの成果物ディレクトリを準備（実行ディレクトリ内のmms_runs）
-                local_artifacts_dir = Path(directory_path) / "mms_runs" / job_id
-                Path(local_artifacts_dir).mkdir(parents=True, exist_ok=True)
+                try:
+                    # ローカルの成果物ディレクトリを準備（実行ディレクトリ内のmms_runs）
+                    local_artifacts_dir = Path(directory_path) / "mms_runs" / job_id
+                    Path(local_artifacts_dir).mkdir(parents=True, exist_ok=True)
 
-                # 結果をダウンロード
-                ssh_service.download_directory(
-                    remote_path=remote_work_dir,
-                    local_path=local_artifacts_dir,
-                    allow_overwrite=True,
-                    priority_version=priority_version,
+                    # 結果をダウンロード（接続が生きていれば）
+                    if ssh_service and ssh_service.is_connected and remote_work_dir:
+                        ssh_service.download_directory(
+                            remote_path=remote_work_dir,
+                            local_path=local_artifacts_dir,
+                            allow_overwrite=True,
+                            priority_version=priority_version,
+                        )
+                except Exception as dl_error:
+                    print(f"ログのダウンロード中にエラー: {dl_error}")
+
+            # キャンセルされた場合は cancelled として記録
+            if is_cancelled:
+                self._finalize_cancelled(
+                    job_id=job_id,
+                    message=self._cancel_reason or "タスクがキャンセルされました",
+                    remote_log_path=remote_log_path,
+                    local_artifacts_path=str(local_artifacts_dir) if local_artifacts_dir else None,
                 )
-
-            self._finalize_failure(
-                job_id=job_id,
-                error_message=error_message,
-                error_traceback=error_traceback,
-                remote_log_path=remote_log_path,
-                local_artifacts_path=str(local_artifacts_dir),
-            )
+            else:
+                # 通常のエラー
+                self._finalize_failure(
+                    job_id=job_id,
+                    error_message=error_message,
+                    error_traceback=error_traceback,
+                    remote_log_path=remote_log_path,
+                    local_artifacts_path=str(local_artifacts_dir) if local_artifacts_dir else None,
+                )
 
         finally:
             # 接続が残っていれば切断
@@ -368,6 +483,12 @@ class MatlantisTaskManager:
                     ssh_service.disconnect()
                 except Exception:
                     pass
+            
+            # クリーンアップ
+            with self._lock:
+                self._ssh_service = None
+                self._remote_work_dir = None
+                self._pid_file = None
 
     # ----------
     # ---ジョブの進捗を更新する
@@ -432,3 +553,24 @@ class MatlantisTaskManager:
                 local_artifacts_path=local_artifacts_path,
             )
             self._status = TaskStatus.FAILED
+
+    def _finalize_cancelled(
+        self,
+        job_id: str,
+        message: str,
+        remote_log_path: Optional[str],
+        local_artifacts_path: Optional[str],
+    ):
+        """タスクのキャンセルを記録する"""
+        with self._lock:
+            if self._current_job:
+                self._current_job.ended_at = datetime.now().isoformat()
+
+            self._last_result = MatlantisJobResult(
+                job_id=job_id,
+                status="cancelled",
+                message=message,
+                remote_log_path=remote_log_path,
+                local_artifacts_path=local_artifacts_path,
+            )
+            self._status = TaskStatus.CANCELLED

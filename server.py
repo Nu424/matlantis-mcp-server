@@ -41,7 +41,7 @@ async def wait_for_task_completion(seconds: int, ctx: Context) -> str:
             await ctx.info(
                 f"Status: {state}, Stage: {status.get('stage')}, Progress: {status.get('progress_pct')}%"
             )
-        elif state in (TaskStatus.SUCCEEDED.value, TaskStatus.FAILED.value):
+        elif state in (TaskStatus.SUCCEEDED.value, TaskStatus.FAILED.value, TaskStatus.CANCELLED.value):
             await ctx.info(
                 f"Status: {state}, Stage: {status.get('stage')}, Progress: {status.get('progress_pct')}%"
             )
@@ -85,7 +85,7 @@ async def get_execution_status() -> str:
 
     Returns:
         str: 実行状況のJSON文字列
-            - status: idle / running / succeeded / failed
+            - status: idle / running / succeeded / failed / cancelled
             - job_id: ジョブID（実行中/完了時）
             - stage: 実行段階（initializing / uploading / executing / downloading / finalizing）
             - progress_pct: 進捗率（0-100）
@@ -106,7 +106,7 @@ async def get_last_result() -> str:
         str: 実行結果のJSON文字列
             - available: 結果が利用可能かどうか
             - job_id: ジョブID
-            - status: succeeded / failed
+            - status: succeeded / failed / cancelled
             - message: メッセージ
             - error: エラーメッセージ（失敗時）
             - traceback: トレースバック（失敗時）
@@ -114,10 +114,34 @@ async def get_last_result() -> str:
             - local_artifacts_path: ローカル成果物ディレクトリのパス
 
     Notes:
-        タスクが成功または失敗で完了した後にのみ、結果が利用可能になる。
+        タスクが成功、失敗、またはキャンセルで完了した後にのみ、結果が利用可能になる。
         実行中や未実行の場合は available=false が返される。
     """
     result = task_manager.get_last_result()
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+async def terminate_current_task(reason: str = "", grace_seconds: int = 10) -> str:
+    """実行中のタスクを強制終了する
+
+    Args:
+        reason: 終了理由（省略可）
+        grace_seconds: SIGTERMからSIGKILLまでの猶予時間（秒）、デフォルトは10秒
+
+    Returns:
+        str: 終了要求の結果をJSON文字列で返す
+            - accepted: 要求が受理されたかどうか
+            - reason: 拒否理由（拒否された場合）
+            - message: メッセージ
+
+    Notes:
+        - 実行中のタスクがない場合は拒否される。
+        - キャンセル処理は各ステージ（アップロード/実行/ダウンロード）に応じて適切に処理される。
+        - 実行中の場合はリモートプロセスにSIGTERMを送信し、猶予時間後もプロセスが生存していればSIGKILLを送信する。
+        - キャンセルされたタスクの状態は get_execution_status() や get_last_result() で確認できる。
+    """
+    result = task_manager.terminate_current_task(reason, grace_seconds)
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
