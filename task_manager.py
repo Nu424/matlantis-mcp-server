@@ -378,9 +378,6 @@ class MatlantisTaskManager:
             )
             remote_log_path = posixpath.join(remote_work_dir, "execution.log")
 
-            # カレントディレクトリをリモートに移動
-            ssh_service._execute_command(f"cd {remote_work_dir}")
-
             # スクリプトを実行（PIDファイルを指定）
             result = ssh_service.execute_python_script(
                 script_path=remote_script_path,
@@ -388,6 +385,7 @@ class MatlantisTaskManager:
                 priority_version=priority_version,
                 python_path=".",
                 pid_file=pid_file,
+                working_directory=remote_work_dir,
             )
 
             self._update_job(progress_pct=70)

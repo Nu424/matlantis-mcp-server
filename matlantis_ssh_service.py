@@ -407,6 +407,7 @@ with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
         priority_version: str = None,
         python_path: str = None,
         pid_file: str = None,
+        working_directory: str = None,
     ):
         """
         リモートのPythonスクリプトを実行する
@@ -417,6 +418,7 @@ with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
             priority_version(str): 優先するPythonバージョン
             python_path(str): PYTHONPATHに追加するパス
             pid_file(str): PIDを保存するファイルのパス(リモート)。指定時は新しいセッションで起動し、プロセスグループIDをPIDファイルに記録する。
+            working_directory(str): カレントディレクトリを移動するパス(リモート)。Noneの場合は実行ディレクトリを使用する。
 
         Returns:
             fabric.Result: コマンド実行結果（stdout, stderr, return_code を含む）
@@ -446,6 +448,13 @@ with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
         quoted_log = _sh_quote(expanded_log_path) if expanded_log_path else None
         quoted_pid_file = _sh_quote(expanded_pid_file) if expanded_pid_file else None
 
+        # working_directory の展開とクオート（将来のスペース/記号含みを考慮）
+        quoted_working_dir = None
+        if working_directory:
+            working_directory_str = str(working_directory).replace("\\", "/")
+            expanded_working_dir = self._expand_remote_path(working_directory_str)
+            quoted_working_dir = _sh_quote(expanded_working_dir)
+
         # リモートスクリプトの存在確認
         check_result = self._execute_command(
             f"test -f {quoted_script} && echo 'exists' || echo 'not_found'"
@@ -461,6 +470,10 @@ with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
         # PYTHONPATHを設定…実行ディレクトリを追加することで、実行ディレクトリ内のモジュールを参照できるようにする
         if python_path:
             python_cmd = f"PYTHONPATH={python_path} {python_cmd}"
+
+        # カレントディレクトリの移動
+        if quoted_working_dir:
+            python_cmd = f"cd {quoted_working_dir} && {python_cmd}"
 
         # 実行コマンドの構築
         if quoted_pid_file:
