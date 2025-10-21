@@ -339,12 +339,26 @@ class MatlantisTaskManager:
             error_message = str(e)
             error_traceback = traceback.format_exc()
 
+            # ---アップロード以降でエラーが起きた場合は、ログをダウンロードする
+            if self._current_job and self._current_job.progress_pct >= 40:
+                # ローカルの成果物ディレクトリを準備（実行ディレクトリ内のmms_runs）
+                local_artifacts_dir = Path(directory_path) / "mms_runs" / job_id
+                Path(local_artifacts_dir).mkdir(parents=True, exist_ok=True)
+
+                # 結果をダウンロード
+                ssh_service.download_directory(
+                    remote_path=remote_work_dir,
+                    local_path=local_artifacts_dir,
+                    allow_overwrite=True,
+                    priority_version=priority_version,
+                )
+
             self._finalize_failure(
                 job_id=job_id,
                 error_message=error_message,
                 error_traceback=error_traceback,
                 remote_log_path=remote_log_path,
-                local_artifacts_path=local_artifacts_dir,
+                local_artifacts_path=str(local_artifacts_dir),
             )
 
         finally:

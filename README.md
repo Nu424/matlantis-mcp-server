@@ -25,6 +25,7 @@ Matlantis環境で計算化学シミュレーションコードを実行する�
 - **ディレクトリダウンロード**: リモートの実行結果をローカルへダウンロード
 - **Pythonスクリプト実行**: リモート環境でPythonスクリプトを実行し、ログと成果物を取得
 - **タスク管理**: バックグラウンドでの単一タスク実行と進捗管理
+- **失敗時の成果物保存**: アップロード完了後にエラーが発生しても、リモート作業ディレクトリ一式をローカルの `mms_runs/{job_id}` に自動保存
 - **MCPプロトコル対応**: Cursor、Claude Desktopなどのクライアントから直接利用可能
 
 ## 仕組みの概要
@@ -84,6 +85,8 @@ Matlantis環境で計算化学シミュレーションコードを実行する�
    ↓
 6. [finalizing] SSH切断・結果記録 (succeeded / failed)
 ```
+
+備考: アップロード完了後のエラー時も Step 5（downloading）を試行し、ローカルの `mms_runs/{job_id}` にログや生成物を保存します。
 
 ## 前提条件
 
@@ -339,6 +342,8 @@ Matlantis環境でPythonスクリプトを実行します。
 }
 ```
 
+備考: スクリプトがアップロード完了後の段階で失敗した場合でも、`local_artifacts_path` はダウンロード済みディレクトリを指します。
+
 ### 4. `wait_for_task_completion`
 
 タスクが完了するまで指定秒数の間待機します。待機中は1秒ごとに進捗を報告し、タスクが `succeeded` または `failed` になった時点で即座に終了します。指定時間内に完了しなかった場合はタイムアウトとして終了します（その場合は `get_execution_status` を再確認してください）。
@@ -384,6 +389,8 @@ Matlantis環境でPythonスクリプトを実行します。
    → local_artifacts_path（実行ディレクトリ内のmms_runs/{job_id}）から成果物を確認
    ```
 
+失敗時も（アップロード完了後であれば）`mms_runs/{job_id}` にログや中間生成物が保存されます。
+
 ### ディレクトリ構成
 
 **リモート（Matlantis環境）:**
@@ -408,6 +415,8 @@ Matlantis環境でPythonスクリプトを実行します。
           ├── results/      # 生成されたファイル
           └── execution.log # 実行ログ
 ```
+
+この `mms_runs/{job_id}` は成功時に限らず、アップロード完了後に失敗した場合も自動作成されます。
 
 ## 仕様と制約
 
@@ -447,6 +456,8 @@ mms_runs
 - スクリプトが非ゼロの終了コードを返した場合、タスクは `failed` となる
 - エラー情報は `get_last_result()` の `error` と `traceback` フィールドに記録される
 - リモートログは常に `~/mms-jobs/{job_id}/execution.log` に保存される
+ - アップロード完了後に発生したエラーでは、`~/mms-jobs/{job_id}/` の内容をローカルの `mms_runs/{job_id}` に自動ダウンロードし、`get_last_result.local_artifacts_path` で参照できます。
+ - 注意: 失敗時も成果物が蓄積するため、不要な `mms_runs/{job_id}` は手動で削除してください。
 
 ## Python API（直接利用）
 
@@ -627,6 +638,8 @@ ValueError: ローカルパス ./results は既に存在し中身があります
 2. `local_artifacts_path` の `execution.log` を確認
 3. リモート環境で必要なパッケージがインストールされているか確認
 4. スクリプトのパスや依存ファイルが正しいか確認
+
+補足: アップロード完了後に失敗した場合は、`mms_runs/{job_id}` に自動保存された `execution.log` や生成物を確認できます。
 
 ### デバッグモード
 
