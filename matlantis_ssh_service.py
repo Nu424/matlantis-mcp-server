@@ -153,13 +153,15 @@ class MatlantisSSHService:
             pass
 
     # ---リモートのPython環境確認
-    def _detect_remote_python(self) -> str:
+    def _detect_remote_python(self, priority_version: str = None) -> str:
         """リモートのPythonコマンドを検出する
         
         ~/.py39/bin/python3, ~/.py310/bin/python3 等を探索し、
         最新のバージョンのPythonを優先して返す。
         見つからない場合は which python3 || which python にフォールバックする。
         """
+        if priority_version:
+            return f"~/.py{priority_version}/bin/python3"
         # まず ~/.py*/bin/python3 の候補を探索し、最新を選択
         detect_script = """
 set -e
@@ -213,7 +215,7 @@ which python3 2>/dev/null || which python 2>/dev/null
     # ----------
     # ---各種機能
     # ----------
-    def upload_directory(self, local_path: str, remote_path: str):
+    def upload_directory(self, local_path: str, remote_path: str, priority_version: str = None):
         """
         ローカルのディレクトリをリモートにアップロードする
 
@@ -256,7 +258,7 @@ which python3 2>/dev/null || which python 2>/dev/null
             self._execute_command(f"mkdir -p '{expanded_remote_path}'")
 
             # 5. リモートでzipを解凍（~ や環境変数を展開してから使用）
-            python_cmd = self._detect_remote_python()
+            python_cmd = self._detect_remote_python(priority_version)
             unzip_script = f"""
 import os
 import zipfile
@@ -278,7 +280,7 @@ with zipfile.ZipFile(zip_path, 'r') as zf:
 
             sftp.close()
 
-    def download_directory(self, remote_path: str, local_path: str, allow_overwrite: bool = False):
+    def download_directory(self, remote_path: str, local_path: str, allow_overwrite: bool = False, priority_version: str = None):
         """
         リモートのディレクトリをローカルにダウンロードする
 
@@ -314,7 +316,7 @@ with zipfile.ZipFile(zip_path, 'r') as zf:
 
         try:
             # 1. リモートでzipを作成
-            python_cmd = self._detect_remote_python()
+            python_cmd = self._detect_remote_python(priority_version)
             remote_home = self._get_remote_home()
             remote_tmp_dir = self._remote_path_join(remote_home, '.matlantis-ssh-service', 'tmp')
             self._execute_command(f"mkdir -p '{remote_tmp_dir}'")
@@ -372,7 +374,7 @@ with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
 
             sftp.close()
 
-    def execute_python_script(self, script_path: str, script_log_path: str = None):
+    def execute_python_script(self, script_path: str, script_log_path: str = None, priority_version: str = None, python_path: str = None):
         """
         リモートのPythonスクリプトを実行する
 
@@ -386,23 +388,40 @@ with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
         if not self.is_connected:
             raise RuntimeError("SSH接続が成立していません")
 
+        # パスの正規化（WindowsのバックスラッシュをPOSIXに）と ~ 展開
+        script_path_str = str(script_path).replace('\\', '/')
+        expanded_script_path = self._expand_remote_path(script_path_str)
+
+        expanded_log_path = None
+        if script_log_path:
+            script_log_path_str = str(script_log_path).replace('\\', '/')
+            expanded_log_path = self._expand_remote_path(script_log_path_str)
+
+        # シェル用の安全な単一引用符クオート
+        def _sh_quote(p: str) -> str:
+            return "'" + p.replace("'", "'\"'\"'") + "'"
+
+        quoted_script = _sh_quote(expanded_script_path)
+        quoted_log = _sh_quote(expanded_log_path) if expanded_log_path else None
+
         # リモートスクリプトの存在確認
         check_result = self._execute_command(
-            f"test -f {script_path} && echo 'exists' || echo 'not_found'")
+            f"test -f {quoted_script} && echo 'exists' || echo 'not_found'")
         if check_result.stdout.strip() != 'exists':
-            raise FileNotFoundError(f"リモートスクリプト {script_path} が存在しません")
+            raise FileNotFoundError(f"リモートスクリプト {expanded_script_path} が存在しません")
 
         # Pythonコマンドの検出
-        python_cmd = self._detect_remote_python()
-
+        python_cmd = self._detect_remote_python(priority_version)
+        if python_path:
+            python_cmd = f"PYTHONPATH={python_path} {python_cmd}"
         # 実行コマンドの構築
         # -u オプションで標準出力のバッファリングを無効化
-        if script_log_path:
+        if quoted_log:
             # ログファイルに出力する場合
-            command = f"{python_cmd} -u {script_path} > {script_log_path} 2>&1"
+            command = f"{python_cmd} -u {quoted_script} > {quoted_log} 2>&1"
         else:
             # 標準出力/エラーを取得する場合
-            command = f"{python_cmd} -u {script_path}"
+            command = f"{python_cmd} -u {quoted_script}"
 
         # スクリプトを実行（エラーでも例外を投げない設定）
         result = self._execute_command(command)

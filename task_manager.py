@@ -4,6 +4,7 @@ Matlantis タスク実行管理
 """
 
 import os
+import posixpath
 import threading
 import traceback
 import uuid
@@ -223,6 +224,7 @@ class MatlantisTaskManager:
             ssh_user = os.getenv("USER_NAME", "jovyan")
             ssh_key = os.getenv("IDENTITY_FILE")
             local_port = int(os.getenv("LOCAL_PORT", "2222"))
+            priority_version = os.getenv("PRIORITY_VERSION", None)
 
             # 必須環境変数のチェック
             missing_vars = []
@@ -263,7 +265,7 @@ class MatlantisTaskManager:
 
             # ディレクトリをアップロード
             ssh_service.upload_directory(
-                local_path=directory_path, remote_path=remote_work_dir
+                local_path=directory_path, remote_path=remote_work_dir, priority_version=priority_version
             )
 
             self._update_job(progress_pct=40)
@@ -272,13 +274,20 @@ class MatlantisTaskManager:
             self._update_job(stage="executing", progress_pct=50)
 
             # スクリプトのリモートパスを構築
-            script_name = os.path.basename(script_path)
-            remote_script_path = f"{remote_work_dir}/{script_name}"
-            remote_log_path = f"{remote_work_dir}/execution.log"
+            # directory_pathを基準として、script_pathからの相対パスを計算
+            script_relative_path = os.path.relpath(script_path, directory_path)
+            # WindowsのバックスラッシュをPOSIXのスラッシュに正規化
+            script_relative_path_posix = script_relative_path.replace("\\", "/")
+            # リモート(Linux)側のパス結合はPOSIXで行う
+            remote_script_path = posixpath.join(remote_work_dir, script_relative_path_posix)
+            remote_log_path = posixpath.join(remote_work_dir, "execution.log")
+
+            # カレントディレクトリをリモートに移動
+            ssh_service._execute_command(f"cd {remote_work_dir}")
 
             # スクリプトを実行
             result = ssh_service.execute_python_script(
-                script_path=remote_script_path, script_log_path=remote_log_path
+                script_path=remote_script_path, script_log_path=remote_log_path, priority_version=priority_version, python_path="."
             )
 
             self._update_job(progress_pct=70)
@@ -303,6 +312,7 @@ class MatlantisTaskManager:
                 remote_path=remote_work_dir,
                 local_path=local_artifacts_dir,
                 allow_overwrite=True,
+                priority_version=priority_version,
             )
 
             self._update_job(progress_pct=90)
